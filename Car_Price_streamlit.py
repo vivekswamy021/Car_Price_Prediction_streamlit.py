@@ -1,84 +1,80 @@
-# streamlit app
 import streamlit as st
 import pandas as pd
 import joblib
-import os
-
-# --- Page Config ---
-st.set_page_config(page_title="Vehicle Price Predictor", page_icon="🚗")
 
 # --- Load Model and Encoders ---
+# We use st.cache_resource so the model only loads once, saving memory.
 @st.cache_resource
 def load_assets():
-    # Adding checks to ensure files exist before loading
-    model_path = "linear_regression_model.joblib"
-    encoder_path = "label_encoders.joblib"
-    
-    if not os.path.exists(model_path) or not os.path.exists(encoder_path):
-        st.error("Model or Encoder files missing! Please ensure .joblib files are in the directory.")
+    try:
+        model = joblib.load("linear_regression_model.joblib")
+        encoders = joblib.load("label_encoders.joblib")
+        return model, encoders
+    except FileNotFoundError:
+        st.error("Model files not found. Please ensure .joblib files are in the repository.")
         return None, None
-        
-    model = joblib.load(model_path)
-    encoders = joblib.load(encoder_path)
-    return model, encoders
 
 model, encoders = load_assets()
 
-# --- App Title and Description ---
+# --- App UI ---
+st.set_page_config(page_title="Vehicle Price Predictor", page_icon="🚗")
 st.title("🚗 Vehicle Price Prediction")
-st.markdown("Enter the vehicle details in the sidebar to get an estimated selling price.")
+st.markdown("Adjust the features in the sidebar to estimate the selling price.")
 
-# --- User Input in Sidebar ---
-if encoders:
+if model and encoders:
+    # --- Sidebar Inputs ---
     st.sidebar.header("Vehicle Features")
 
-    def user_input_features():
-        # Using a dictionary to collect inputs
-        data = {}
-        data["year"] = st.sidebar.slider("Year", 1990, 2026, 2018)
-        
-        # Categorical inputs from encoders
-        categorical_cols = ["make", "model", "trim", "body", "transmission", "state", "color", "interior", "seller"]
-        
-        for col in categorical_cols:
-            if col in encoders:
-                data[col] = st.sidebar.selectbox(f"{col.title()}", encoders[col].classes_)
-        
-        # Numerical inputs
-        data["condition"] = st.sidebar.slider("Condition (1-5)", 1.0, 5.0, 3.5, 0.1)
-        data["odometer"] = st.sidebar.number_input("Odometer (miles)", min_value=0, max_value=500000, value=50000)
-        data["mmr"] = st.sidebar.number_input("Manheim Market Report (MMR)", min_value=0, value=20000)
+    def get_user_input():
+        year = st.sidebar.slider("Year", 1990, 2026, 2018)
+        # Using .classes_ from your saved LabelEncoders
+        make = st.sidebar.selectbox("Make", encoders["make"].classes_)
+        model_input = st.sidebar.selectbox("Model", encoders["model"].classes_)
+        trim = st.sidebar.selectbox("Trim", encoders["trim"].classes_)
+        body = st.sidebar.selectbox("Body Type", encoders["body"].classes_)
+        transmission = st.sidebar.selectbox("Transmission", encoders["transmission"].classes_)
+        state = st.sidebar.selectbox("State", encoders["state"].classes_)
+        condition = st.sidebar.slider("Condition (1-5)", 1.0, 5.0, 3.5, 0.1)
+        odometer = st.sidebar.number_input("Odometer (miles)", 0, 500000, 50000)
+        color = st.sidebar.selectbox("Color", encoders["color"].classes_)
+        interior = st.sidebar.selectbox("Interior Color", encoders["interior"].classes_)
+        seller = st.sidebar.selectbox("Seller", encoders["seller"].classes_)
+        mmr = st.sidebar.number_input("Manheim Market Report (MMR)", 0, 100000, 20000)
 
+        data = {
+            "year": year, "make": make, "model": model_input, "trim": trim,
+            "body": body, "transmission": transmission, "state": state,
+            "condition": condition, "odometer": odometer, "color": color,
+            "interior": interior, "seller": seller, "mmr": mmr
+        }
         return pd.DataFrame(data, index=[0])
 
-    input_df = user_input_features()
+    input_df = get_user_input()
 
     # --- Display Inputs ---
     st.subheader("Selected Vehicle Specs")
     st.dataframe(input_df)
 
-    # --- Prediction Logic ---
+    # --- Encoding & Prediction ---
     if st.button("Predict Price"):
-        try:
-            # Encode User Inputs
-            encoded_df = input_df.copy()
-            for col in encoders:
-                if col in encoded_df.columns:
-                    encoded_df[col] = encoders[col].transform(encoded_df[col])
-            
-            # Predict
-            prediction = model.predict(encoded_df)
-            
-            # Display Result
-            st.markdown("---")
-            st.subheader("Estimated Market Value")
-            price = max(0, prediction[0]) # Ensure price isn't negative
-            st.success(f"### **${price:,.2f}**")
-            
-            # Contextual info
-            st.info(f"The predicted price is based on a condition score of {input_df['condition'].iloc[0]}/5.")
-            
-        except Exception as e:
-            st.error(f"Prediction Error: {e}")
-else:
-    st.warning("Please upload your `linear_regression_model.joblib` and `label_encoders.joblib` files to the repository.")
+        # Create a copy for encoding to keep the original for display
+        encoded_df = input_df.copy()
+        
+        for col, encoder in encoders.items():
+            if col in encoded_df.columns:
+                val = encoded_df[col].iloc[0]
+                try:
+                    encoded_df[col] = encoder.transform([val])
+                except ValueError:
+                    # Fallback for unseen labels
+                    encoded_df[col] = -1 
+
+        # Ensure column order matches training (important for Linear Regression)
+        # Assuming the model expects columns in a specific order:
+        prediction = model.predict(encoded_df)
+        
+        st.divider()
+        st.subheader("Estimated Price")
+        # Ensure the prediction isn't negative (common with simple LinReg)
+        final_price = max(0, prediction[0])
+        st.success(f"The estimated selling price is: **${final_price:,.2f}**")
