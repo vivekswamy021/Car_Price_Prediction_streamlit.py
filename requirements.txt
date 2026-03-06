@@ -1,6 +1,5 @@
-numpy
-pandas
-scikit-learn
-xgboost
 streamlit
+pandas
+joblib
+scikit-learn
 altair<5.0.0
